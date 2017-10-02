@@ -8,20 +8,21 @@
 #include "MQTTClient.h"
 #include <unistd.h>
 #include <sstream>
+
 #define ADDRESS     		"tcp://localhost:1883"
 #define CLIENTID    		"ESP_AUTO_DELETE"
 #define ESP_PUB_TOPIC   "esphome/from/ping"
 #define ESP_SUB_TOPIC   "esphome/to/ping"
 #define HOME_PUB_TOPIC  "homebridge/to/get"
 #define HOME_SUB_TOPIC  "homebridge/from/response"
-#define TOPIC       		"esphome/from/ping"
+
 #define QOS         		1
 #define TIMEOUT     		10000L
+#define PING_WAIT				10
 using namespace std;
 using json = nlohmann::json;
 
 volatile MQTTClient_deliveryToken deliveredtoken;
-
 
 list<string> deviceToDelete;
 int deviceIndex = 0;
@@ -35,12 +36,25 @@ int msgarrvd(void *context, char *topicName, int topicLen, MQTTClient_message *m
     char* payloadptr;
     printf("Message arrived\n");
     printf("     topic: %s\n", topicName);
-//    printf("   message: ");
     payloadptr = (char *) message->payload;
 		cout << "message=" << payloadptr<< endl;
-		auto j = json::parse(payloadptr);
 
-		if(!strcmp(topicName, &ESP_SUB_TOPIC[0])){
+		string payloadString = string(payloadptr);	
+
+		// Filter out unwanted characters		
+		while(payloadString.find('') > 0){
+			int loc = payloadString.find('');
+			printf("CHARACTER IS FOUND at %d!\n", loc);
+			if(loc > 0){
+				payloadString.replace(payloadString.find(''),1,"");
+			}else{
+				break;
+			}
+		}
+
+		auto j = json::parse(payloadString);
+
+		if(!strcmp(topicName, &ESP_SUB_TOPIC[0])){ // If topic is ESP_SUB_TOPIC
 			cout << "got message from ESP_SUB_TOPIC" << endl;
 			string parsedName = j.at("name").get<std::string>();
 			auto it = find(deviceToDelete.begin(), deviceToDelete.end(), parsedName);
@@ -60,14 +74,6 @@ int msgarrvd(void *context, char *topicName, int topicLen, MQTTClient_message *m
 			cout << "Received unrecognized message from topic: " << topicName << endl;
 		}	
 		
-//		printf("name = %s\n", parsedName.c_str());
-//		std::cout << "j.name =" << j.at("name").get<std::string>() << "\n" << std::endl;
-		
-//    for(i=0; i<message->payloadlen; i++)
-//    {
-//        putchar(*payloadptr++);
-//    }
-    putchar('\n');
     MQTTClient_freeMessage(&message);
     MQTTClient_free(topicName);
     return 1;
@@ -96,15 +102,19 @@ int main(int argc, char* argv[])
         printf("Failed to connect, return code %d\n", rc);
         exit(EXIT_FAILURE);
     }
-    printf("Subscribing to topic %s\nfor client %s using QoS%d\n\n"
-           "Press Q<Enter> to quit\n\n", HOME_SUB_TOPIC, CLIENTID, QOS);
+
     MQTTClient_subscribe(client, HOME_SUB_TOPIC, QOS);
     MQTTClient_subscribe(client, ESP_SUB_TOPIC, QOS);
 
-    pubmsg.payload = (char *) PAYLOAD;
+    pubmsg.payload 		= (char *) PAYLOAD;
     pubmsg.payloadlen = strlen(PAYLOAD);
-    pubmsg.qos = QOS;
-    pubmsg.retained = 0;
+    pubmsg.qos 				= QOS;
+    pubmsg.retained 	= 0;
+
+		// Publish to HOME_PUB_TOPIC to get list of homebridge 
+		// registered MQTT accessories
+
+
     MQTTClient_publishMessage(client, HOME_PUB_TOPIC, &pubmsg, &token);
     printf("Waiting for up to %d seconds for publication of %s\n"
             "on topic %s for client with ClientID: %s\n",
@@ -118,7 +128,7 @@ int main(int argc, char* argv[])
             (int)(TIMEOUT/1000), PAYLOAD, HOME_PUB_TOPIC, CLIENTID);
     rc = MQTTClient_waitForCompletion(client, token, TIMEOUT);
 		
-		sleep(2);
+		sleep(PING_WAIT);
 		MQTTClient_unsubscribe(client,HOME_SUB_TOPIC);
 		cout << "Final list for delete is " << endl;
 		for(string s : deviceToDelete){
@@ -131,19 +141,7 @@ int main(int argc, char* argv[])
     	pubmsg.retained = 0;
     	MQTTClient_publishMessage(client, "homebridge/to/remove", &pubmsg, &token);
 		}
-		//while(1){
-		//	static int a = 0;
-		//	cout << a << endl;
-		//	sleep(1);
-		//	a++;
-		//}
 
-//Program stalls after this
-//    do
-//    {
-//        ch = getchar();
-//				
-//    } while(ch!='Q' && ch != 'q');
     MQTTClient_disconnect(client, 10000);
     MQTTClient_destroy(&client);
     return rc;
